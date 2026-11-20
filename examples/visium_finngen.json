@@ -1,0 +1,15 @@
+{
+  "gss": "/path/to/sample_gene_marker_score.feather",
+  "burden": "/data/burden/FinnGen_R12_G6_MIGRAINE_Mask1.0.01_ADD.tsv.gz",
+  "h5ad": "/path/to/V1_Adult_Mouse_Brain_Coronal_Section.h5ad",
+  "annotation": "domain",
+  "trait_name": "FinnGen_R12_G6_MIGRAINE",
+  "gene_col": "gene",
+  "p_col": "p",
+  "gene_map": null,
+  "permutations": 0,
+  "seed": 42,
+  "min_genes": 100,
+  "chunk_size": 64,
+  "out": "results/FinnGen_MIGRAINE"
+}

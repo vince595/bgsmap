@@ -1,0 +1,17 @@
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+*.h5ad
+*.feather
+*.parquet
+*.pdf
+*.html
+*.gz
+*.xz
+results/
+data/

@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bgsmap"
+version = "0.2.0"
+description = "Spatial rare-variant burden enrichment using gsMap gene specificity scores"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "gsMap-burden contributors"}]
+keywords = ["spatial transcriptomics", "burden test", "rare variants", "gsMap"]
+classifiers = ["Programming Language :: Python :: 3", "Topic :: Scientific/Engineering :: Bio-Informatics"]
+dependencies = ["numpy>=1.23,<3", "pandas>=1.5,<3", "scipy>=1.10,<2", "matplotlib>=3.6,<4", "plotly>=5,<7"]
+
+[project.optional-dependencies]
+feather = ["pyarrow>=14"]
+h5ad = ["h5py>=3.8"]
+all = ["pyarrow>=14", "h5py>=3.8"]
+dev = ["pytest>=7", "build>=1", "ruff>=0.7"]
+
+[project.scripts]
+bgsmap = "bgsmap.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/vince595/bgsmap"
+Issues = "https://github.com/vince595/bgsmap/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
