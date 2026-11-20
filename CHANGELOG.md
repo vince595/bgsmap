@@ -1,9 +1,13 @@
 # Changelog
 
-## 0.2.0 (2026-11-18)
+## 1.0.0 (2026-11-20)
 
-- Publish under the distribution, import, and CLI name `bgsmap` (formerly `gsmap-burden`).
-- Emit timestamped command, input, analysis, permutation, and output progress to stderr.
+- First stable release of the `bgsmap` package and CLI, formerly `gsmap-burden`.
+- Source archives and wheels use the same version as the CLI and run metadata.
+
+## 0.2.0
+
+- Introduce the `bgsmap` package and CLI name and timestamped progress logging to stderr.
 - Introduce primary **continuous analytic Gaussian-tail P values**, using the exact finite-population variance of the conditional within-stratum gene-label permutation distribution (new statistic-level inference; see docs/statistics.md).
 - Write `p_analytic`, `logp_analytic`, `z_analytic`, analytic BH/Holm and corresponding competitive columns into the primary spot/domain result tables.
 - All spatial / competitive region HTML, PDF and report tables use analytic P or `-log10(P)` (computed without float64 underflow). **No plots use `p_empirical`.** Top descriptive gene domain uses analytic competitive P.

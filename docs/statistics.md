@@ -1,4 +1,4 @@
-# Statistical methods in v0.2.0
+# Statistical methods
 
 This implementation tests association of gene-level burden intensity with a gsMap GSS-derived *spatial* profile. It is not gsMap SNP-level spatial LDSC.
 

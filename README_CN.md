@@ -2,7 +2,7 @@
 
 bgsmap 联合原版 gsMap 产生的基因特异性评分（GSS）和基因级稀有变异 burden 汇总统计，计算 spot 和空间域富集，输出 TSV、交互式 HTML 和矢量 PDF。
 
-v0.2.0 的主结果和绘图使用解析 P 值。默认 `--permutations 0`，也可按需开启独立的经验 P 值诊断。解析 P 值基于正态尾部近似，研究中使用极小 P 值前应评估校准情况。[新版 P 值与绘图说明](docs/PVALUES_v0.2_CN.md)
+v1.0.0 的主结果和绘图使用解析 P 值。默认 `--permutations 0`，也可按需开启独立的经验 P 值诊断。解析 P 值基于正态尾部近似，研究中使用极小 P 值前应评估校准情况。[P 值与绘图说明](docs/PVALUES_v0.2_CN.md)
 
 ## 1. 安装
 
@@ -16,7 +16,7 @@ python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple bgsmap
 也可安装发布 wheel，或进入解压后的源码目录安装。
 
 ```bash
-python -m pip install ./bgsmap-0.2.0-py3-none-any.whl
+python -m pip install ./bgsmap-1.0.0-py3-none-any.whl
 # 或在解压后的源码根目录执行
 python -m pip install .
 ```
@@ -120,7 +120,7 @@ results/VisiumCoronal/
 
 三类统计量：**spot 富集**指此 spot 的 GSS 和真实 burden 强度是否高于基因标签置换；**domain mean 富集**指整个域的平均评分是否异常偏高；**competitive domain 富集**指该域相对于其他 spots 是否表现出更高的 burden 信号。最后一个更适合检验你之前 C（competitive null）的目的。主结果使用解析 P 值 `p_analytic`/`p_competitive_analytic`，`q_bh_analytic` 为单表型内 BH，`p_holm_analytic` 为 Holm 校正；只有可选诊断文件保留原 maxT 与经验 P。
 
-v0.2.0 的 `logp_analytic` 不受 permutation 次数的分辨率限制；`--permutations` 仅用于额外校准诊断。
+`logp_analytic` 不受 permutation 次数的分辨率限制。`--permutations` 用于额外校准诊断。
 
 ## 6. 用模拟数据自测
 
@@ -164,7 +164,7 @@ python -m build
 
 ```bash
 conda activate gsmap
-python -m pip install --no-deps --force-reinstall bgsmap-0.2.0-py3-none-any.whl
+python -m pip install --no-deps --force-reinstall bgsmap-1.0.0-py3-none-any.whl
 python -c 'import bgsmap; print(bgsmap.__version__)'
 ```
 

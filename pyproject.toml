@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bgsmap"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Spatial rare-variant burden enrichment using gsMap gene specificity scores"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,6 +30,9 @@ Issues = "https://github.com/vince595/bgsmap/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "bgsmap.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

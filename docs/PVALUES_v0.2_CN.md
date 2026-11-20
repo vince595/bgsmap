@@ -1,4 +1,4 @@
-# bgsmap v0.2.0：连续 P 值、结果保存与画图规范
+# bgsmap 的连续 P 值、结果保存与绘图
 
 ## 设计原则
 
@@ -57,8 +57,8 @@ python -m bgsmap --version
 #   --burden "$BURDEN" --trait-name Height --permutations 0 --out "$OUT"
 
 # 如需独立诊断，另加 --permutations 999（不会限制主要输出 P）
-# 已用 v0.2.0 跑过结果时，可无须计算地重新生成新图
+# 已有解析 P 值结果时，可直接重新生成图
 # bgsmap plot --out "$OUT" --trait-name Height
 ```
 
-**旧结果迁移**：v0.1.x 旧 `spot_results.tsv.gz` / `region_results.tsv` 只有经验 P，**无法仅通过重画图获得解析 P**。需要使用同样的输入、基因映射和参数重新运行 v0.2.0 的 `run`。如果直接对旧输出执行 `plot`，程序会明确报错，**不会静默地退回 `p_empirical`**。
+**旧结果迁移**。v0.1.x 生成的 `spot_results.tsv.gz` 和 `region_results.tsv` 只有经验 P。请使用同样的输入、基因映射和参数重新运行 `bgsmap run` 以获得解析结果。`bgsmap plot` 会在缺少解析 P 值时提示重新运行。

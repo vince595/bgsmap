@@ -1,26 +1,26 @@
-# bgsmap v0.2.0：MOSTA E16.5 修复与安装
+# bgsmap v1.0.0 在 MOSTA E16.5 数据上的安装与使用
 
 适用于已有 gsMap 1.73.7 和 MOSTA GSS 文件的环境。可复用已生成的 GSS。
 
 ## 1. 在服务器上安装新 WHL
 
-在保存 `bgsmap-0.2.0-py3-none-any.whl` 的目录中执行以下命令。
+在保存 `bgsmap-1.0.0-py3-none-any.whl` 的目录中执行以下命令。
 
 ```bash
 conda activate gsmap
-python -m pip install './bgsmap-0.2.0-py3-none-any.whl[all]'
+python -m pip install './bgsmap-1.0.0-py3-none-any.whl[all]'
 
 python -c 'import bgsmap; print(bgsmap.__version__, bgsmap.__file__)'
 bgsmap --version
 ```
 
-预期版本为 `0.2.0`。旧项目的分发名为 `gsmap-burden`，新项目的分发名、导入名和 CLI 均为 `bgsmap`。
+预期版本为 `1.0.0`。旧项目的分发名为 `gsmap-burden`，新项目的分发名、导入名和 CLI 均为 `bgsmap`。
 
 也可从源码 ZIP 安装。
 
 ```bash
-unzip bgsmap-v0.2.0-source.zip
-cd bgsmap-0.2.0
+unzip bgsmap-v1.0.0-source.zip
+cd bgsmap-1.0.0
 python -m pip install '.[all]'
 ```
 

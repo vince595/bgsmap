@@ -4,7 +4,7 @@
 
 bgsmap integrates gene-level rare-variant burden summaries with gene specificity scores (GSS) from [gsMap](https://github.com/JianYang-Lab/gsMap). It computes enrichment per spatial spot and domain and exports TSV, interactive HTML, and vector PDF.
 
-Version 0.2.0 uses normal-tail approximations for its primary P values and saves optional empirical permutation diagnostics in separate files. See the [statistical model](https://github.com/vince595/bgsmap/blob/main/docs/statistics.md) or the [v0.2 migration guide (Chinese)](https://github.com/vince595/bgsmap/blob/main/docs/PVALUES_v0.2_CN.md).
+Version 1.0.0 uses normal-tail approximations for its primary P values and saves optional empirical permutation diagnostics in separate files. See the [statistical model](https://github.com/vince595/bgsmap/blob/main/docs/statistics.md) or the [P-value migration guide (Chinese)](https://github.com/vince595/bgsmap/blob/main/docs/PVALUES_v0.2_CN.md).
 
 ## Install
 
@@ -18,7 +18,7 @@ python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple bgsmap
 The Tsinghua mirror makes new releases available after it syncs with PyPI. Until then, install from the release wheel or an unpacked source tree:
 
 ```bash
-python -m pip install ./bgsmap-0.2.0-py3-none-any.whl
+python -m pip install ./bgsmap-1.0.0-py3-none-any.whl
 # Or run this from the unpacked source tree:
 python -m pip install .
 ```
@@ -143,7 +143,7 @@ bgsmap quick \
 ```bash
 # Edit the input and column names first
 bgsmap run --config examples/visium_finngen.json
-# Regenerate plots from v0.2 analytic tables (not from v0.1.x tables)
+# Regenerate plots from tables that include analytic P values
 bgsmap plot --out results/coronal --trait-name G6_MIGRAINE
 ```
 

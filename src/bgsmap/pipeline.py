@@ -152,6 +152,6 @@ def replot(out, trait_name="Trait", invert_y=True):
     region=pd.read_csv(out/"region_results.tsv",sep="\t")
     gene=pd.read_csv(out/"gene_contributions.tsv.gz",sep="\t")
     if not {'logp_analytic','p_analytic'}.issubset(spot.columns) or not {'logp_competitive_analytic','p_competitive_analytic'}.issubset(region.columns):
-        raise ValueError("These v0.1.x result tables lack analytic P values. Re-run 'bgsmap run' with v0.2.0; cannot regenerate analytic P values from empirical-only tables.")
+        raise ValueError("These result tables lack analytic P values. Re-run 'bgsmap run' to generate analytic results before plotting.")
     LOG.info("Rendering HTML reports and vector PDFs in %s", out / "plots")
     write_plots(spot,region,gene,out/"plots",trait=trait_name,invert_y=invert_y)
