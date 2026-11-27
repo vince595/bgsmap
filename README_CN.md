@@ -2,21 +2,25 @@
 
 bgsmap 联合原版 gsMap 产生的基因特异性评分（GSS）和基因级稀有变异 burden 汇总统计，计算 spot 和空间域富集，输出 TSV、交互式 HTML 和矢量 PDF。
 
-v1.0.0 的主结果和绘图使用解析 P 值。默认 `--permutations 0`，也可按需开启独立的经验 P 值诊断。解析 P 值基于正态尾部近似，研究中使用极小 P 值前应评估校准情况。[P 值与绘图说明](docs/PVALUES_v0.2_CN.md)
+主结果和绘图使用解析 P 值。默认 `--permutations 0`，也可按需开启独立的经验 P 值诊断。解析 P 值基于正态尾部近似，研究中使用极小 P 值前应评估校准情况。[P 值与绘图说明](docs/PVALUES_v0.2_CN.md)
+
+1.3.0 将通用分块引擎接入 `bgsmap run`。解析模式自动启用单表型内部 spot 并行，
+支持 Feather V2、Parquet、TSV、CSV，按内存预算调整块大小，并记录各阶段耗时。
+可复用同一切片的磁盘缓存。详见 [大数据性能与内存指南](docs/PERFORMANCE_CN.md)。
 
 ## 1. 安装
 
-要求 Python 3.10 或更高版本。PyPI 发布后可选用以下任一命令，清华源需等待镜像同步。
+要求 Python 3.10 或更高版本。使用以下任一命令安装或升级，清华源需等待镜像同步。
 
 ```bash
-python -m pip install bgsmap
-python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple bgsmap
+python -m pip install --upgrade 'bgsmap[all]'
+python -m pip install --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple 'bgsmap[all]'
 ```
 
 也可安装发布 wheel，或进入解压后的源码目录安装。
 
 ```bash
-python -m pip install ./bgsmap-1.0.0-py3-none-any.whl
+python -m pip install ./bgsmap-1.3.0-py3-none-any.whl
 # 或在解压后的源码根目录执行
 python -m pip install .
 ```
@@ -144,7 +148,7 @@ python -m build
 
 首次发布时，在 PyPI 账户的 Publishing 页面添加 GitHub Trusted Publisher。项目名填 `bgsmap`，Owner 填 `vince595`，Repository 填 `bgsmap`，Workflow name 填 `publish.yml`，Environment name 填 `pypi`。[PyPI 首次发布说明](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
 
-将待发布版本提交到 `main` 后，在 GitHub Actions 运行 **Publish to PyPI**。工作流会先执行测试和包检查，再上传 wheel 和源码分发包。
+将版本号更新合并到 `main` 后会自动运行 **Publish to PyPI**，也可在 GitHub Actions 手动运行。工作流先执行测试和包检查，再发布到 PyPI，并创建同版本 GitHub Release，附带 wheel 和源码包。
 
 ## 7. 服务器兼容性提示
 
@@ -164,7 +168,7 @@ python -m build
 
 ```bash
 conda activate gsmap
-python -m pip install --no-deps --force-reinstall bgsmap-1.0.0-py3-none-any.whl
+python -m pip install --no-deps --force-reinstall bgsmap-1.3.0-py3-none-any.whl
 python -c 'import bgsmap; print(bgsmap.__version__)'
 ```
 

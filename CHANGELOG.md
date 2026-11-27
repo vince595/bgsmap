@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.3.0
+
+- Make `bgsmap run` and `quick` automatically select the bounded analytic
+  engine with `--permutations 0`. Permutation diagnostics select the legacy engine.
+- Extend projected GSS reading to Parquet. Import TSV/CSV, including compressed
+  files, into bounded gene-major disk caches for analytic computation.
+- Add `--memory-limit` and adaptive spot-block/projection sizing. Automatic
+  workers use up to four available CPUs and respect Linux CPU affinity.
+- Build missing `--gss-cache` directories on demand. Support `--temp-dir`
+  for automatically cleaned text-input caches.
+- Record source setup, alignment, QC, spot computation, table writing, plotting
+  and total timings in run metadata.
+- Fix explicit CLI flags being overridden by configuration values when the
+  flag value equals its parser default.
+- Document dataset-independent commands and cross-format benchmarks.
+
+## 1.2.0
+
+- Integrate the fast, bounded-memory Feather V2 analytic engine. Run it with
+  `bgsmap-lowmem run` or `bgsmap run --engine fast`.
+- Separate wide Feather projections from spot compute blocks, with a bounded
+  pool of spot workers and separate read/compute phase logging.
+- Add `cache-gss` to reuse spot-major GSS data across burden traits.
+- Share burden weighting, analytic P, BH/Holm and result-table code with the
+  in-memory engine. The default `bgsmap run` continues to use that engine.
+- Add HESTA Slurm instructions, numeric regression tests and a benchmark
+  against the `bgsmap-lowmem 1.1.0` extension wheel.
+
 ## 1.0.0 (2026-11-20)
 
 - First stable release of the `bgsmap` package and CLI, formerly `gsmap-burden`.

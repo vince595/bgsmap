@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+from copy import copy
+from time import perf_counter
 from pathlib import Path
 
 import numpy as np
@@ -60,6 +62,43 @@ def _align_spot_ids(spots, coords, h5ad=None, spatial_key="spatial", annotation=
 
 
 def run_pipeline(args):
+    """Run the software's normal entry point with automatic engine selection."""
+    options = copy(args)
+    requested = getattr(options, "engine", "auto")
+    engine = requested
+    if requested == "auto":
+        engine = "fast" if options.permutations == 0 else "legacy"
+        if engine == "fast" and str(options.gss).lower().endswith((".feather", ".arrow")):
+            with Path(options.gss).expanduser().open("rb") as source:
+                if source.read(4) == b"FEA1":
+                    engine = "legacy"
+    if engine not in ("fast", "legacy"):
+        raise ValueError(f"Unknown engine: {requested}")
+    if engine == "fast" and options.permutations != 0:
+        raise ValueError("--engine fast requires --permutations 0")
+    if engine == "legacy" and any(getattr(options, name, None) is not None for name in (
+        "threads", "block_size", "projection_size", "gss_cache", "memory_limit", "temp_dir",
+    )):
+        raise ValueError("Spot workers, memory budgets and GSS caches require analytic fast computation. "
+                         "Feather V1 inputs can use legacy or be converted to Feather V2.")
+    options.engine = engine
+    started = perf_counter()
+    LOG.info("Selected %s engine (requested %s)", engine, requested)
+    if engine == "fast":
+        from .lowmem import run_pipeline_fast
+        details = run_pipeline_fast(options)
+    else:
+        details = _run_pipeline_legacy(options)
+    performance = details.setdefault("performance", {})
+    performance["total_seconds"] = perf_counter() - started
+    details["execution"] = {"requested_engine": requested, "engine": engine}
+    (Path(options.out).expanduser().resolve() / "run_metadata.json").write_text(
+        json.dumps(details, indent=2, ensure_ascii=False), encoding="utf-8",
+    )
+    return details
+
+
+def _run_pipeline_legacy(args):
     out=Path(args.out).expanduser().resolve()
     out.mkdir(parents=True,exist_ok=True)
     LOG.info("Output directory: %s", out)
@@ -97,6 +136,27 @@ def run_pipeline(args):
     skipped=int(np.sum(~good))
     gss=gss[good];gene_ix=gene_ix[good]
     burden=burden.loc[list(gene_ix)].reset_index(drop=True)
+    burden = _add_covariates(burden, args)
+    # Matching null is only plausible when power-related gene covariates are supplied.
+    if not args.match_cols:
+        LOG.warning("No gene-level power covariates matched. Unstratified gene-label permutation is exploratory.")
+    LOG.info("Matched %d genes and %d spots; %d genes excluded for invalid/invariant GSS",len(gene_ix),len(spots),skipped)
+    r=run_enrichment(gss, gene_ix,spots,burden,coords,
+                     permutations=args.permutations,seed=args.seed,chunk_size=args.chunk_size,
+                     p_cap=args.p_cap,score_mode=args.score_mode,binary_threshold=args.binary_threshold,
+                     matching_cols=args.match_cols,match_bins=args.match_bins)
+    details={"tool":"bgsmap","version":__version__,"input_gss":str(Path(args.gss).resolve()),
+             "input_burden":str(Path(args.burden).resolve()),
+             "input_spatial":str(Path(args.h5ad or args.coords).resolve()),
+             "input_burden_column_mapping":info,"genes_before_qc":len(keep_genes),
+             "genes_after_qc":len(gene_ix),"excluded_invalid_or_invariant_genes":skipped,
+             "n_input_gss_spots":len(keep_spots),"trait_name":args.trait_name,
+             **r.meta}
+    _write_results(r, burden, details, out, args, skip_plots=getattr(args, 'skip_plots', False))
+    return details
+
+
+def _add_covariates(burden, args):
     if args.covariates:
         LOG.info("Reading gene matching covariates: %s", args.covariates)
         cv=read_table(args.covariates)
@@ -113,14 +173,11 @@ def run_pipeline(args):
         if set(match_cols) & set(burden.columns):
             raise ValueError("Matching column appears in both burden and covariate inputs; rename ambiguous column")
         burden=burden.merge(cv[["gene"]+match_cols],on="gene",how="left",validate="one_to_one")
-    # Matching null is only plausible when power-related gene covariates are supplied.
-    if not args.match_cols:
-        LOG.warning("No gene-level power covariates matched. Unstratified gene-label permutation is exploratory.")
-    LOG.info("Matched %d genes and %d spots; %d genes excluded for invalid/invariant GSS",len(gene_ix),len(spots),skipped)
-    r=run_enrichment(gss, gene_ix,spots,burden,coords,
-                     permutations=args.permutations,seed=args.seed,chunk_size=args.chunk_size,
-                     p_cap=args.p_cap,score_mode=args.score_mode,binary_threshold=args.binary_threshold,
-                     matching_cols=args.match_cols,match_bins=args.match_bins)
+    return burden
+
+
+def _write_results(r, burden, details, out, args, skip_plots=False):
+    started = perf_counter()
     LOG.info("Writing result tables and metadata to %s", out)
     for src,target,compression in ((r.spot,"spot_results.tsv.gz","gzip"),
                                     (r.region,"region_results.tsv",None),
@@ -130,19 +187,18 @@ def run_pipeline(args):
         r.spot_permutation.to_csv(out/"spot_permutation_diagnostics.tsv.gz",sep="\t",index=False,compression="gzip")
         r.region_permutation.to_csv(out/"region_permutation_diagnostics.tsv",sep="\t",index=False)
     burden.to_csv(out/"aligned_burden.tsv.gz",sep="\t",index=False,compression="gzip")
-    details={"tool":"bgsmap","version":__version__,"input_gss":str(Path(args.gss).resolve()),
-             "input_burden":str(Path(args.burden).resolve()),
-             "input_spatial":str(Path(args.h5ad or args.coords).resolve()),
-             "input_burden_column_mapping":info,"genes_before_qc":len(keep_genes),
-             "genes_after_qc":len(gene_ix),"excluded_invalid_or_invariant_genes":skipped,
-             "n_input_gss_spots":len(keep_spots),"trait_name":args.trait_name,
-             **r.meta}
+    performance = details.setdefault("performance", {})
+    performance["write_tables_seconds"] = perf_counter() - started
+    if skip_plots:
+        LOG.info("Result tables complete")
+        performance["plot_seconds"] = 0.0
+    else:
+        LOG.info("Rendering HTML reports and vector PDFs")
+        started = perf_counter()
+        write_plots(r.spot,r.region,r.gene,out/"plots",trait=args.trait_name,
+                    invert_y=not args.no_invert_y)
+        performance["plot_seconds"] = perf_counter() - started
     (out/"run_metadata.json").write_text(json.dumps(details,indent=2,ensure_ascii=False),encoding="utf-8")
-    LOG.info("Rendering HTML reports and vector PDFs")
-    write_plots(r.spot,r.region,r.gene,out/"plots",trait=args.trait_name,
-                invert_y=not args.no_invert_y)
-    LOG.info("Complete. HTML: %s | PDF: %s",out/"plots"/"report.html",out/"plots"/"spatial_enrichment.pdf")
-    return details
 
 
 def replot(out, trait_name="Trait", invert_y=True):

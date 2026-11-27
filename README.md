@@ -4,21 +4,26 @@
 
 bgsmap integrates gene-level rare-variant burden summaries with gene specificity scores (GSS) from [gsMap](https://github.com/JianYang-Lab/gsMap). It computes enrichment per spatial spot and domain and exports TSV, interactive HTML, and vector PDF.
 
-Version 1.0.0 uses normal-tail approximations for its primary P values and saves optional empirical permutation diagnostics in separate files. See the [statistical model](https://github.com/vince595/bgsmap/blob/main/docs/statistics.md) or the [P-value migration guide (Chinese)](https://github.com/vince595/bgsmap/blob/main/docs/PVALUES_v0.2_CN.md).
+Primary P values use normal-tail approximations and the in-memory engine saves optional empirical permutation diagnostics in separate files. See the [statistical model](https://github.com/vince595/bgsmap/blob/main/docs/statistics.md) or the [P-value migration guide (Chinese)](https://github.com/vince595/bgsmap/blob/main/docs/PVALUES_v0.2_CN.md).
+
+Version 1.3.0 enables automatic bounded-memory analytic computation through
+`bgsmap run` for Feather V2, Parquet, TSV and CSV. Spot-block workers, adaptive
+tiles, reusable disk caches and phase timings are part of the software.
+See the [large-dataset performance guide](docs/PERFORMANCE_CN.md).
 
 ## Install
 
-Python 3.10 or later. Once bgsmap is published to PyPI, install it with either command:
+Python 3.10 or later. Install or upgrade with either command:
 
 ```bash
-python -m pip install bgsmap
-python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple bgsmap
+python -m pip install --upgrade 'bgsmap[all]'
+python -m pip install --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple 'bgsmap[all]'
 ```
 
-The Tsinghua mirror makes new releases available after it syncs with PyPI. Until then, install from the release wheel or an unpacked source tree:
+The Tsinghua mirror syncs new releases after PyPI. Offline installation is available from a release wheel or an unpacked source tree:
 
 ```bash
-python -m pip install ./bgsmap-1.0.0-py3-none-any.whl
+python -m pip install ./bgsmap-1.3.0-py3-none-any.whl
 # Or run this from the unpacked source tree:
 python -m pip install .
 ```

@@ -137,26 +137,55 @@ def _permutation_variance(profiles, w, strata_indices, block_rows=256):
     No independent-gene or independent-spot approximation is made for
     these second moments. Normality of the tail remains an assumption.
     """
-    n_row, n_genes = profiles.shape
-    out = np.zeros(n_row, dtype=np.float64)
+    factors = _variance_factors(w, strata_indices)
+    out = np.empty(len(profiles), dtype=np.float64)
+    for start in range(0, len(profiles), block_rows):
+        chunk = profiles[start:start+block_rows]
+        out[start:start+len(chunk)] = _profile_variance(chunk, factors)
+    return out
+
+
+def _variance_factors(w, strata_indices):
+    factors = []
     for ix in strata_indices:
-        m = len(ix)
-        if m <= 1:
-            continue
-        wi = np.asarray(w[ix], dtype=np.float64)
-        wi -= wi.mean()
-        factor = np.dot(wi, wi) / (m - 1)
-        if factor == 0:
-            continue
-        whole = m == n_genes
-        for start in range(0, n_row, block_rows):
-            chunk = profiles[start:start+block_rows]
-            a = chunk if whole else chunk[:, ix]
-            sums = a.sum(axis=1, dtype=np.float64)
-            ss = np.einsum('ij,ij->i', a, a, dtype=np.float64)
-            centered_ss = np.maximum(ss - sums*sums/m, 0.0)
-            out[start:start+len(chunk)] += factor * centered_ss
+        if len(ix) > 1:
+            wi = np.asarray(w[ix], dtype=np.float64)
+            wi -= wi.mean()
+            factor = np.dot(wi, wi) / (len(ix) - 1)
+            if factor:
+                factors.append((ix, factor))
+    return factors
+
+
+def _profile_variance(profiles, factors):
+    n_rows, n_genes = profiles.shape
+    out = np.zeros(n_rows, dtype=np.float64)
+    for ix, factor in factors:
+        a = profiles if len(ix) == n_genes else profiles[:, ix]
+        sums = a.sum(axis=1, dtype=np.float64)
+        ss = np.einsum('ij,ij->i', a, a, dtype=np.float64)
+        out += factor * np.maximum(ss - sums*sums/len(ix), 0.0)
     return out / float(n_genes)**2
+
+
+def _burden_weights(burden, score_mode, binary_threshold, p_cap, matching_cols, match_bins):
+    if score_mode not in ('logp', 'binary'):
+        raise ValueError('Invalid score_mode')
+    if score_mode == 'logp':
+        w_raw = np.minimum(-np.log10(np.maximum(burden.p.to_numpy(dtype=float), 1e-300)), p_cap)
+    else:
+        w_raw = (burden.p.to_numpy(dtype=float) <= binary_threshold).astype(float)
+    if not np.isfinite(w_raw).all() or np.std(w_raw) <= 1e-10:
+        raise ValueError('Burden signal has no variation. Select a different score mode or p threshold')
+    strata, matching = make_strata(burden, columns=matching_cols, bins=match_bins)
+    strata_indices = [np.flatnonzero(strata == label) for label in np.unique(strata)]
+    w = w_raw.astype(np.float64).copy()
+    for ix in strata_indices:
+        w[ix] -= w[ix].mean()
+    if np.std(w) < 1e-10:
+        raise ValueError('No within-stratum burden weight variance; relax matching strata')
+    w /= np.std(w)
+    return w_raw, w, strata_indices, matching
 
 
 def run_enrichment(
@@ -179,24 +208,11 @@ def run_enrichment(
         raise ValueError('Too few aligned genes (<20) or spots (<5)')
     if len(genes) != n_genes or len(spots) != n_spots or len(burden) != n_genes:
         raise ValueError('GSS/genes/spots/burden mismatch')
-    if score_mode not in ('logp', 'binary'):
-        raise ValueError('Invalid score_mode')
-    if score_mode == 'logp':
-        w_raw = np.minimum(-np.log10(np.maximum(burden.p.to_numpy(dtype=float), 1e-300)), p_cap)
-    else:
-        w_raw = (burden.p.to_numpy(dtype=float) <= binary_threshold).astype(float)
-    if not np.isfinite(w_raw).all() or np.std(w_raw) <= 1e-10:
-        raise ValueError('Burden signal has no variation. Select a different score mode or p threshold')
-    strata, matching = make_strata(burden, columns=matching_cols, bins=match_bins)
-    strata_indices = [np.flatnonzero(strata == label) for label in np.unique(strata)]
+    w_raw, w, strata_indices, matching = _burden_weights(
+        burden, score_mode, binary_threshold, p_cap, matching_cols, match_bins
+    )
     LOG.info("Standardizing GSS and burden weights (%d gene strata, score mode %s)",
              len(strata_indices), score_mode)
-    w = w_raw.astype(np.float64).copy()
-    for ix in strata_indices:
-        w[ix] -= w[ix].mean()
-    if np.std(w) < 1e-10:
-        raise ValueError('No within-stratum burden weight variance; relax matching strata')
-    w /= np.std(w)
     x = gss.astype(np.float32, copy=True)
     x -= x.mean(axis=1, keepdims=True)
     std = x.std(axis=1)
@@ -224,18 +240,10 @@ def run_enrichment(
     dom_var = _permutation_variance(dom_profile, w, strata_indices)
     comp_var = _permutation_variance(comp_profile, w, strata_indices)
 
-    out_sp = coord.loc[list(spots), ['spot','x','y','domain']].reset_index(drop=True).copy()
-    out_sp['score'] = obs
-    _p_columns(out_sp, 'analytic', obs, spot_var)
-    # Legacy 'logp' aliases are deliberately omitted: scripts must explicitly
-    # select the inferential target they render.
-    out_reg = pd.DataFrame({'domain':domains.astype(str),
-                            'n_spots':[len(ix) for ix in dom_ix],
-                            'mean_score':dom_obs,
-                            'competitive_score':comp_obs})
-    _p_columns(out_reg, 'analytic', dom_obs, dom_var)
-    _p_columns(out_reg, 'competitive_analytic', comp_obs, comp_var)
-    out_reg = out_reg.sort_values('p_competitive_analytic', kind='stable').reset_index(drop=True)
+    out_sp, out_reg = _analytic_tables(
+        coord, spots, domains, [len(ix) for ix in dom_ix],
+        obs, spot_var, dom_obs, dom_var, comp_obs, comp_var,
+    )
 
     spot_perm = None
     region_perm = None
@@ -287,6 +295,34 @@ def run_enrichment(
                                     'q_competitive_empirical':bh(comp_p),
                                     'p_competitive_fwer_permutation':p_count((max_comp[None,:]>=comp_obs[:,None]-1e-9).sum(axis=1))})
     top_domain = str(out_reg.iloc[0].domain)
+    out_gene = _gene_contributions(burden, w_raw, w, top_domain, domains, comp_profile)
+    meta = _result_metadata(
+        len(spots), len(domains), w, permutations, seed, score_mode, p_cap,
+        binary_threshold, matching, top_domain,
+    )
+    return EnrichmentResult(out_sp, out_reg, out_gene, meta, spot_perm, region_perm)
+
+
+def _analytic_tables(coords, spots, domains, counts, obs, spot_var, dom_obs, dom_var,
+                     comp_obs, comp_var):
+    out_sp = coords.loc[list(spots), ['spot','x','y','domain']].reset_index(drop=True).copy()
+    out_sp['score'] = obs
+    _p_columns(out_sp, 'analytic', obs, spot_var)
+    # Legacy 'logp' aliases are deliberately omitted: scripts must explicitly
+    # select the inferential target they render.
+    out_reg = pd.DataFrame({'domain':domains.astype(str),
+                            'n_spots':counts,
+                            'mean_score':dom_obs,
+                            'competitive_score':comp_obs})
+    _p_columns(out_reg, 'analytic', dom_obs, dom_var)
+    _p_columns(out_reg, 'competitive_analytic', comp_obs, comp_var)
+    out_reg = out_reg.sort_values('p_competitive_analytic', kind='stable').reset_index(drop=True)
+
+    return out_sp, out_reg
+
+
+def _gene_contributions(burden, w_raw, w, top_domain, domains, comp_profile):
+    n_genes = len(w)
     top_j = domains.get_loc(top_domain)
     contrib = w * comp_profile[top_j] / n_genes
     out_gene = burden[['gene','p']].copy()
@@ -296,8 +332,14 @@ def run_enrichment(
     out_gene['region_vs_rest_gss_z'] = comp_profile[top_j]
     out_gene['contribution'] = contrib
     out_gene = out_gene.sort_values('contribution', ascending=False).reset_index(drop=True)
+    return out_gene
+
+
+def _result_metadata(n_spots, n_domains, w, permutations, seed, score_mode, p_cap,
+                     binary_threshold, matching, top_domain):
+    n_genes = len(w)
     effective_n = (np.dot(w, w)**2 / np.dot(w*w, w*w))
-    meta = {'n_genes':n_genes,'n_spots':n_spots,'n_domains':len(domains),
+    meta = {'n_genes':n_genes,'n_spots':n_spots,'n_domains':n_domains,
             'permutations':permutations,'random_seed':seed,
             'score_mode':score_mode,'p_cap':p_cap,'binary_threshold':binary_threshold,
             'matching':matching,'one_sided':True,
@@ -312,4 +354,4 @@ def run_enrichment(
             'permutation_diagnostics_saved':bool(permutations),
             'top_region_for_descriptive_gene_contributions':top_domain,
             'warning':'Normal-tail P values avoid finite Monte Carlo resolution, but can be miscalibrated for sparse/heavy-tailed burden weights, gene dependence, or nonexchangeable strata; test null calibration before publication.'}
-    return EnrichmentResult(out_sp, out_reg, out_gene, meta, spot_perm, region_perm)
+    return meta
