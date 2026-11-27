@@ -1,6 +1,10 @@
 name: Publish to PyPI
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - src/bgsmap/__init__.py
   workflow_dispatch:
 
 permissions:
@@ -10,6 +14,8 @@ jobs:
   build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,10 +25,29 @@ jobs:
       - run: python -m pytest -q
       - run: python -m build
       - run: python -m twine check --strict dist/*
+      - id: version
+        run: python -c 'import bgsmap; print("version=" + bgsmap.__version__)' >> "$GITHUB_OUTPUT"
+      - name: Prepare release notes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          section = changelog.split("\n## ", 2)[1]
+          notes = section.split("\n", 1)[1].strip()
+          notes += "\n\nInstall with `python -m pip install --upgrade 'bgsmap[all]'`.\n"
+          notes += "\nSee [performance and memory options](https://github.com/vince595/bgsmap/blob/main/docs/PERFORMANCE_CN.md).\n"
+          Path("release-notes.md").write_text(notes, encoding="utf-8")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: python-distributions
           path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
           if-no-files-found: error
 
   publish:
@@ -37,3 +62,28 @@ jobs:
           name: python-distributions
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  release:
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes/
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          gh release create "v$RELEASE_VERSION" dist/* \
+            --target "$RELEASE_COMMIT" --title "bgsmap $RELEASE_VERSION" \
+            --notes-file notes/release-notes.md --latest

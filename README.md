@@ -13,14 +13,14 @@ See the [large-dataset performance guide](docs/PERFORMANCE_CN.md).
 
 ## Install
 
-Python 3.10 or later. Once bgsmap is published to PyPI, install it with either command:
+Python 3.10 or later. Install or upgrade with either command:
 
 ```bash
-python -m pip install bgsmap
-python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple bgsmap
+python -m pip install --upgrade 'bgsmap[all]'
+python -m pip install --upgrade -i https://pypi.tuna.tsinghua.edu.cn/simple 'bgsmap[all]'
 ```
 
-The Tsinghua mirror makes new releases available after it syncs with PyPI. Until then, install from the release wheel or an unpacked source tree:
+The Tsinghua mirror syncs new releases after PyPI. Offline installation is available from a release wheel or an unpacked source tree:
 
 ```bash
 python -m pip install ./bgsmap-1.3.0-py3-none-any.whl

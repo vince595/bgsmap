@@ -7,17 +7,18 @@ bgsmap 在匹配的基因和空间 spots 上计算 burden 富集。计算与调�
 
 ## 安装与普通入口
 
-在下载的 wheel 所在目录执行。旧的独立低内存扩展与新版共用命令名，
-安装新版前先卸载该扩展。
+旧的独立低内存扩展与新版共用命令名，安装新版前先卸载该扩展。
+可通过 PyPI 或清华镜像安装。
 
 ```bash
 python -m pip uninstall -y bgsmap-lowmem
 python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple \
-  './bgsmap-1.3.0-py3-none-any.whl[all]'
+  --upgrade 'bgsmap[all]==1.3.0'
 bgsmap --version
 ```
 
-源码安装使用 `python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple '.[all]'`。
+清华镜像同步前，可从 GitHub Release 下载 wheel 并安装
+`'./bgsmap-1.3.0-py3-none-any.whl[all]'`。源码安装使用 `python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple '.[all]'`。
 分发包名和导入名均为 `bgsmap`。保留的 `bgsmap-lowmem` 命令默认显式选择 fast 引擎。
 
 ```bash
