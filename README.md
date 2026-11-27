@@ -4,7 +4,9 @@
 
 bgsmap integrates gene-level rare-variant burden summaries with gene specificity scores (GSS) from [gsMap](https://github.com/JianYang-Lab/gsMap). It computes enrichment per spatial spot and domain and exports TSV, interactive HTML, and vector PDF.
 
-Version 1.0.0 uses normal-tail approximations for its primary P values and saves optional empirical permutation diagnostics in separate files. See the [statistical model](https://github.com/vince595/bgsmap/blob/main/docs/statistics.md) or the [P-value migration guide (Chinese)](https://github.com/vince595/bgsmap/blob/main/docs/PVALUES_v0.2_CN.md).
+Primary P values use normal-tail approximations and the in-memory engine saves optional empirical permutation diagnostics in separate files. See the [statistical model](https://github.com/vince595/bgsmap/blob/main/docs/statistics.md) or the [P-value migration guide (Chinese)](https://github.com/vince595/bgsmap/blob/main/docs/PVALUES_v0.2_CN.md).
+
+For large Feather V2 slices, use the 1.2.0 [fast-engine and HESTA guide](docs/HESTA_LOWMEM_CN.md).
 
 ## Install
 
@@ -18,7 +20,7 @@ python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple bgsmap
 The Tsinghua mirror makes new releases available after it syncs with PyPI. Until then, install from the release wheel or an unpacked source tree:
 
 ```bash
-python -m pip install ./bgsmap-1.0.0-py3-none-any.whl
+python -m pip install ./bgsmap-1.2.0-py3-none-any.whl
 # Or run this from the unpacked source tree:
 python -m pip install .
 ```

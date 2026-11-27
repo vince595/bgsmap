@@ -23,6 +23,7 @@ dev = ["pytest>=7", "build>=1", "ruff>=0.7"]
 
 [project.scripts]
 bgsmap = "bgsmap.cli:main"
+bgsmap-lowmem = "bgsmap.cli:lowmem_main"
 
 [project.urls]
 Homepage = "https://github.com/vince595/bgsmap"

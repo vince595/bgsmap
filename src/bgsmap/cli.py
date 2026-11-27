@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 from time import perf_counter
 
@@ -14,8 +15,9 @@ from .demo import generate_demo
 LOG = logging.getLogger(__name__)
 
 
-def build_parser():
-    parser=argparse.ArgumentParser(prog="bgsmap",description="Spatial gene-level burden enrichment with gsMap GSS (NOT SNP-level LDSC)")
+def build_parser(lowmem=False):
+    prog = "bgsmap-lowmem" if lowmem else "bgsmap"
+    parser=argparse.ArgumentParser(prog=prog,description="Spatial gene-level burden enrichment with gsMap GSS (NOT SNP-level LDSC)")
     parser.add_argument("--version",action="version",version=f"bgsmap {__version__}")
     subs=parser.add_subparsers(dest="command",required=True)
     r=subs.add_parser("run",help="End-to-end QC → enrichment → HTML/PDF plots",formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -49,6 +51,16 @@ def build_parser():
     r.add_argument("--chunk-size",type=int,default=64)
     r.add_argument("--out",help="Output directory")
     r.add_argument("--no-invert-y",action="store_true",help="Do not invert histology-oriented y-axis")
+    r.add_argument("--engine", choices=["legacy", "fast"], default="fast" if lowmem else "legacy",
+                   help="Use the in-memory pipeline or the bounded Feather V2 analytic engine")
+    r.add_argument("--threads", "--n-threads", type=int,
+                   help="Concurrent spot-block workers for fast (default 1 or BGS_LOWMEM_THREADS)")
+    r.add_argument("--block-size", type=int,
+                   help="Spots per worker block (default 512 or BGS_LOWMEM_SPOT_BLOCK)")
+    r.add_argument("--projection-size", type=int,
+                   help="Feather columns per projection (default 4096)")
+    r.add_argument("--gss-cache", help="Use a cache directory built by cache-gss")
+    r.add_argument("--skip-plots", action="store_true", help="Write result tables without rendering plots")
     q=subs.add_parser("quick",help="Generate upstream gsMap GSS then run burden enrichment (requires gsMap)")
     # The 'quick' parser accepts all burden-run options (plus upstream inputs).
     for action in r._actions:
@@ -80,6 +92,12 @@ def build_parser():
     d=subs.add_parser("demo",help="Create synthetic toy GSS/coords/burden inputs")
     d.add_argument("--out",required=True)
     d.add_argument("--seed",type=int,default=19)
+    cache=subs.add_parser("cache-gss", help="Convert Feather V2 once to a reusable spot-major cache")
+    cache.add_argument("--gss", required=True, help="Source Feather V2 / Arrow IPC file")
+    cache.add_argument("--out", required=True, help="Destination cache directory")
+    cache.add_argument("--gss-gene-col", help="GSS gene-ID field (auto-detected by default)")
+    cache.add_argument("--projection-size", type=int, default=4096,
+                       help="Feather columns per projection")
     return parser
 
 
@@ -101,8 +119,39 @@ def _config_apply(parser, args):
     return args
 
 
-def main(argv=None):
-    parser = build_parser()
+def _fast_options(parser, args):
+    if args.engine not in ("fast", "legacy"):
+        parser.error("--engine must be fast or legacy")
+    if args.engine == "legacy":
+        if any(option is not None for option in
+               (args.threads, args.block_size, args.projection_size, args.gss_cache)):
+            parser.error("Spot worker and GSS cache settings require --engine fast")
+        return
+    if args.permutations != 0:
+        parser.error("--engine fast requires --permutations 0; use --engine legacy for diagnostics")
+    for name, default, env, maximum in (
+        ("threads", 1, "BGS_LOWMEM_THREADS", 128),
+        ("block_size", 512, "BGS_LOWMEM_SPOT_BLOCK", 16384),
+        ("projection_size", 4096, None, 32768),
+    ):
+        option = getattr(args, name)
+        if option is None:
+            try:
+                option = int(os.environ.get(env, default)) if env else default
+            except ValueError:
+                parser.error(f"{env} must be an integer")
+        if type(option) is not int or not 1 <= option <= maximum:
+            parser.error(f"--{name.replace('_', '-')} must be an integer between 1 and {maximum}")
+        setattr(args, name, option)
+    args.skip_plots = args.skip_plots or os.environ.get("BGS_LOWMEM_SKIP_PLOTS") == "1"
+
+
+def lowmem_main():
+    return main(lowmem=True)
+
+
+def main(argv=None, *, lowmem=False):
+    parser = build_parser(lowmem)
     args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.WARNING,
@@ -181,6 +230,12 @@ def main(argv=None):
         if not info:
             parser.error("inspect requires --h5ad, --coords, --burden, or --gss")
         print(json.dumps(info,indent=2,ensure_ascii=False))
+    elif args.command == "cache-gss":
+        from .gss_stream import build_cache
+        if not 1 <= args.projection_size <= 32768:
+            parser.error("--projection-size must be between 1 and 32768")
+        out = build_cache(args.gss, args.out, args.gss_gene_col, args.projection_size)
+        print(json.dumps({"gss_cache": str(out)}))
     elif args.command=="demo":
         LOG.info("Generating synthetic inputs in %s", args.out)
         dest=generate_demo(args.out,args.seed);print(f"Synthetic demo created: {dest}")
@@ -189,6 +244,7 @@ def main(argv=None):
         print(f"Plots written to: {Path(args.out)/'plots'}")
     else:
         args=_config_apply(parser,args)
+        _fast_options(parser, args)
         if args.command=="quick":
             from .gsmap_bridge import precompute_gss
             if not args.h5ad:
@@ -204,9 +260,14 @@ def main(argv=None):
             parser.error("--min-genes must be >=20")
         if args.p_cap<=0 or args.binary_threshold<=0 or args.binary_threshold>=1:
             parser.error("Invalid p-cap/binary-threshold")
-        details=run_pipeline(args)
-        print(json.dumps({"results":str(Path(args.out).resolve()),"n_genes":details["n_genes"],
-                          "n_spots":details["n_spots"],"report":str(Path(args.out).resolve()/"plots"/"report.html")},indent=2))
+        if args.engine == "fast":
+            from .lowmem import run_pipeline_fast
+            details = run_pipeline_fast(args)
+        else:
+            details = run_pipeline(args)
+        report = None if args.skip_plots else str(Path(args.out).resolve() / "plots" / "report.html")
+        print(json.dumps({"results": str(Path(args.out).resolve()), "n_genes": details["n_genes"],
+                          "n_spots": details["n_spots"], "report": report}, indent=2))
     LOG.info("Finished bgsmap %s in %.1f s", args.command, perf_counter() - start)
 
 

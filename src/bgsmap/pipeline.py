@@ -97,6 +97,27 @@ def run_pipeline(args):
     skipped=int(np.sum(~good))
     gss=gss[good];gene_ix=gene_ix[good]
     burden=burden.loc[list(gene_ix)].reset_index(drop=True)
+    burden = _add_covariates(burden, args)
+    # Matching null is only plausible when power-related gene covariates are supplied.
+    if not args.match_cols:
+        LOG.warning("No gene-level power covariates matched. Unstratified gene-label permutation is exploratory.")
+    LOG.info("Matched %d genes and %d spots; %d genes excluded for invalid/invariant GSS",len(gene_ix),len(spots),skipped)
+    r=run_enrichment(gss, gene_ix,spots,burden,coords,
+                     permutations=args.permutations,seed=args.seed,chunk_size=args.chunk_size,
+                     p_cap=args.p_cap,score_mode=args.score_mode,binary_threshold=args.binary_threshold,
+                     matching_cols=args.match_cols,match_bins=args.match_bins)
+    details={"tool":"bgsmap","version":__version__,"input_gss":str(Path(args.gss).resolve()),
+             "input_burden":str(Path(args.burden).resolve()),
+             "input_spatial":str(Path(args.h5ad or args.coords).resolve()),
+             "input_burden_column_mapping":info,"genes_before_qc":len(keep_genes),
+             "genes_after_qc":len(gene_ix),"excluded_invalid_or_invariant_genes":skipped,
+             "n_input_gss_spots":len(keep_spots),"trait_name":args.trait_name,
+             **r.meta}
+    _write_results(r, burden, details, out, args, skip_plots=getattr(args, 'skip_plots', False))
+    return details
+
+
+def _add_covariates(burden, args):
     if args.covariates:
         LOG.info("Reading gene matching covariates: %s", args.covariates)
         cv=read_table(args.covariates)
@@ -113,14 +134,10 @@ def run_pipeline(args):
         if set(match_cols) & set(burden.columns):
             raise ValueError("Matching column appears in both burden and covariate inputs; rename ambiguous column")
         burden=burden.merge(cv[["gene"]+match_cols],on="gene",how="left",validate="one_to_one")
-    # Matching null is only plausible when power-related gene covariates are supplied.
-    if not args.match_cols:
-        LOG.warning("No gene-level power covariates matched. Unstratified gene-label permutation is exploratory.")
-    LOG.info("Matched %d genes and %d spots; %d genes excluded for invalid/invariant GSS",len(gene_ix),len(spots),skipped)
-    r=run_enrichment(gss, gene_ix,spots,burden,coords,
-                     permutations=args.permutations,seed=args.seed,chunk_size=args.chunk_size,
-                     p_cap=args.p_cap,score_mode=args.score_mode,binary_threshold=args.binary_threshold,
-                     matching_cols=args.match_cols,match_bins=args.match_bins)
+    return burden
+
+
+def _write_results(r, burden, details, out, args, skip_plots=False):
     LOG.info("Writing result tables and metadata to %s", out)
     for src,target,compression in ((r.spot,"spot_results.tsv.gz","gzip"),
                                     (r.region,"region_results.tsv",None),
@@ -130,19 +147,14 @@ def run_pipeline(args):
         r.spot_permutation.to_csv(out/"spot_permutation_diagnostics.tsv.gz",sep="\t",index=False,compression="gzip")
         r.region_permutation.to_csv(out/"region_permutation_diagnostics.tsv",sep="\t",index=False)
     burden.to_csv(out/"aligned_burden.tsv.gz",sep="\t",index=False,compression="gzip")
-    details={"tool":"bgsmap","version":__version__,"input_gss":str(Path(args.gss).resolve()),
-             "input_burden":str(Path(args.burden).resolve()),
-             "input_spatial":str(Path(args.h5ad or args.coords).resolve()),
-             "input_burden_column_mapping":info,"genes_before_qc":len(keep_genes),
-             "genes_after_qc":len(gene_ix),"excluded_invalid_or_invariant_genes":skipped,
-             "n_input_gss_spots":len(keep_spots),"trait_name":args.trait_name,
-             **r.meta}
     (out/"run_metadata.json").write_text(json.dumps(details,indent=2,ensure_ascii=False),encoding="utf-8")
+    if skip_plots:
+        LOG.info("Result tables complete")
+        return
     LOG.info("Rendering HTML reports and vector PDFs")
     write_plots(r.spot,r.region,r.gene,out/"plots",trait=args.trait_name,
                 invert_y=not args.no_invert_y)
     LOG.info("Complete. HTML: %s | PDF: %s",out/"plots"/"report.html",out/"plots"/"spatial_enrichment.pdf")
-    return details
 
 
 def replot(out, trait_name="Trait", invert_y=True):

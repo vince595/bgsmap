@@ -2,7 +2,9 @@
 
 bgsmap 联合原版 gsMap 产生的基因特异性评分（GSS）和基因级稀有变异 burden 汇总统计，计算 spot 和空间域富集，输出 TSV、交互式 HTML 和矢量 PDF。
 
-v1.0.0 的主结果和绘图使用解析 P 值。默认 `--permutations 0`，也可按需开启独立的经验 P 值诊断。解析 P 值基于正态尾部近似，研究中使用极小 P 值前应评估校准情况。[P 值与绘图说明](docs/PVALUES_v0.2_CN.md)
+主结果和绘图使用解析 P 值。默认 `--permutations 0`，也可按需开启独立的经验 P 值诊断。解析 P 值基于正态尾部近似，研究中使用极小 P 值前应评估校准情况。[P 值与绘图说明](docs/PVALUES_v0.2_CN.md)
+
+大切片 Feather V2 分析请参见 [1.2.0 低内存引擎与 HESTA 集群用法](docs/HESTA_LOWMEM_CN.md)。
 
 ## 1. 安装
 
@@ -16,7 +18,7 @@ python -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple bgsmap
 也可安装发布 wheel，或进入解压后的源码目录安装。
 
 ```bash
-python -m pip install ./bgsmap-1.0.0-py3-none-any.whl
+python -m pip install ./bgsmap-1.2.0-py3-none-any.whl
 # 或在解压后的源码根目录执行
 python -m pip install .
 ```
@@ -164,7 +166,7 @@ python -m build
 
 ```bash
 conda activate gsmap
-python -m pip install --no-deps --force-reinstall bgsmap-1.0.0-py3-none-any.whl
+python -m pip install --no-deps --force-reinstall bgsmap-1.2.0-py3-none-any.whl
 python -c 'import bgsmap; print(bgsmap.__version__)'
 ```
 
