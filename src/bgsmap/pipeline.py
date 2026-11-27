@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+from copy import copy
+from time import perf_counter
 from pathlib import Path
 
 import numpy as np
@@ -60,6 +62,43 @@ def _align_spot_ids(spots, coords, h5ad=None, spatial_key="spatial", annotation=
 
 
 def run_pipeline(args):
+    """Run the software's normal entry point with automatic engine selection."""
+    options = copy(args)
+    requested = getattr(options, "engine", "auto")
+    engine = requested
+    if requested == "auto":
+        engine = "fast" if options.permutations == 0 else "legacy"
+        if engine == "fast" and str(options.gss).lower().endswith((".feather", ".arrow")):
+            with Path(options.gss).expanduser().open("rb") as source:
+                if source.read(4) == b"FEA1":
+                    engine = "legacy"
+    if engine not in ("fast", "legacy"):
+        raise ValueError(f"Unknown engine: {requested}")
+    if engine == "fast" and options.permutations != 0:
+        raise ValueError("--engine fast requires --permutations 0")
+    if engine == "legacy" and any(getattr(options, name, None) is not None for name in (
+        "threads", "block_size", "projection_size", "gss_cache", "memory_limit", "temp_dir",
+    )):
+        raise ValueError("Spot workers, memory budgets and GSS caches require analytic fast computation. "
+                         "Feather V1 inputs can use legacy or be converted to Feather V2.")
+    options.engine = engine
+    started = perf_counter()
+    LOG.info("Selected %s engine (requested %s)", engine, requested)
+    if engine == "fast":
+        from .lowmem import run_pipeline_fast
+        details = run_pipeline_fast(options)
+    else:
+        details = _run_pipeline_legacy(options)
+    performance = details.setdefault("performance", {})
+    performance["total_seconds"] = perf_counter() - started
+    details["execution"] = {"requested_engine": requested, "engine": engine}
+    (Path(options.out).expanduser().resolve() / "run_metadata.json").write_text(
+        json.dumps(details, indent=2, ensure_ascii=False), encoding="utf-8",
+    )
+    return details
+
+
+def _run_pipeline_legacy(args):
     out=Path(args.out).expanduser().resolve()
     out.mkdir(parents=True,exist_ok=True)
     LOG.info("Output directory: %s", out)
@@ -138,6 +177,7 @@ def _add_covariates(burden, args):
 
 
 def _write_results(r, burden, details, out, args, skip_plots=False):
+    started = perf_counter()
     LOG.info("Writing result tables and metadata to %s", out)
     for src,target,compression in ((r.spot,"spot_results.tsv.gz","gzip"),
                                     (r.region,"region_results.tsv",None),
@@ -147,14 +187,18 @@ def _write_results(r, burden, details, out, args, skip_plots=False):
         r.spot_permutation.to_csv(out/"spot_permutation_diagnostics.tsv.gz",sep="\t",index=False,compression="gzip")
         r.region_permutation.to_csv(out/"region_permutation_diagnostics.tsv",sep="\t",index=False)
     burden.to_csv(out/"aligned_burden.tsv.gz",sep="\t",index=False,compression="gzip")
-    (out/"run_metadata.json").write_text(json.dumps(details,indent=2,ensure_ascii=False),encoding="utf-8")
+    performance = details.setdefault("performance", {})
+    performance["write_tables_seconds"] = perf_counter() - started
     if skip_plots:
         LOG.info("Result tables complete")
-        return
-    LOG.info("Rendering HTML reports and vector PDFs")
-    write_plots(r.spot,r.region,r.gene,out/"plots",trait=args.trait_name,
-                invert_y=not args.no_invert_y)
-    LOG.info("Complete. HTML: %s | PDF: %s",out/"plots"/"report.html",out/"plots"/"spatial_enrichment.pdf")
+        performance["plot_seconds"] = 0.0
+    else:
+        LOG.info("Rendering HTML reports and vector PDFs")
+        started = perf_counter()
+        write_plots(r.spot,r.region,r.gene,out/"plots",trait=args.trait_name,
+                    invert_y=not args.no_invert_y)
+        performance["plot_seconds"] = perf_counter() - started
+    (out/"run_metadata.json").write_text(json.dumps(details,indent=2,ensure_ascii=False),encoding="utf-8")
 
 
 def replot(out, trait_name="Trait", invert_y=True):

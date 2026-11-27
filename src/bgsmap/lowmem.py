@@ -11,7 +11,8 @@ import numpy as np
 import pandas as pd
 
 from . import __version__
-from .gss_stream import CachedGSS, FeatherGSS
+from .gss_stream import analysis_source
+from .resources import plan_blocks
 from .io import load_burden, load_coords, read_gene_map
 from .pipeline import _add_covariates, _align_spot_ids, _write_results
 from .statistics import (
@@ -28,20 +29,29 @@ from .statistics import (
 LOG = logging.getLogger(__name__)
 
 
-def _parallel_blocks(blocks, compute, threads, name, n_spots):
+def _parallel_blocks(blocks, compute, threads, name, n_spots, metrics=None):
     """Read ahead by at most one block and reduce worker results in input order."""
     started = perf_counter()
     read_seconds = 0.0
     done = 0
+    worker_seconds = 0.0
+    n_blocks = 0
     progress = max(1, n_spots // 10)
     next_log = progress
     pending = deque()
     iterator = iter(blocks)
 
+    def timed_compute(start, block):
+        then = perf_counter()
+        result = compute(start, block)
+        return result, perf_counter() - then
+
     def report(task):
-        nonlocal done, next_log
+        nonlocal done, next_log, worker_seconds, n_blocks
         start, size, future = task
-        result = future.result()
+        result, seconds = future.result()
+        worker_seconds += seconds
+        n_blocks += 1
         if start != done:
             raise RuntimeError("Unexpected GSS block order")
         done += size
@@ -60,16 +70,19 @@ def _parallel_blocks(blocks, compute, threads, name, n_spots):
             read_seconds += perf_counter() - then
             if len(pending) == threads:
                 yield report(pending.popleft())
-            pending.append((start, len(block), executor.submit(compute, start, block)))
+            pending.append((start, len(block), executor.submit(timed_compute, start, block)))
         while pending:
             yield report(pending.popleft())
     if done != n_spots:
         raise RuntimeError(f"Read only {done}/{n_spots} GSS spots during {name}")
+    if metrics is not None:
+        metrics.update(wall_seconds=perf_counter() - started, read_seconds=read_seconds,
+                       worker_seconds=worker_seconds, n_blocks=n_blocks, threads=threads)
     LOG.info("%s finished in %.2f s, including %.2f s pulling GSS blocks",
              name, perf_counter() - started, read_seconds)
 
 
-def _gene_moments(blocks, n_genes, n_spots, threads):
+def _gene_moments(blocks, n_genes, n_spots, threads, metrics=None):
     # Shifting by the first spot avoids cancellation for nearly invariant
     # nonzero genes. Each worker returns only vectors of length n_genes.
     anchor = np.empty(n_genes, dtype=np.float64)
@@ -92,7 +105,7 @@ def _gene_moments(blocks, n_genes, n_spots, threads):
     squares = np.zeros_like(sums)
     invalid = np.zeros(n_genes, dtype=bool)
     for _, (bad, block_sum, block_squares) in _parallel_blocks(
-        with_anchor(), moments, threads, "Pass 1/2 — gene QC", n_spots
+        with_anchor(), moments, threads, "Pass 1/2 — gene QC", n_spots, metrics
     ):
         invalid |= bad
         sums += block_sum
@@ -103,7 +116,7 @@ def _gene_moments(blocks, n_genes, n_spots, threads):
     return good, (anchor[good] + mean[good]).astype(np.float32), sd[good].astype(np.float32)
 
 
-def _spot_statistics(blocks, means, stds, w, strata, codes, n_domains, threads):
+def _spot_statistics(blocks, means, stds, w, strata, codes, n_domains, threads, metrics=None):
     n_spots = len(codes)
     factors = _variance_factors(w, strata)
     weights = w.astype(np.float32)
@@ -128,7 +141,7 @@ def _spot_statistics(blocks, means, stds, w, strata, codes, n_domains, threads):
     var = np.empty(n_spots, dtype=np.float64)
     sums = np.zeros((n_domains, len(w)), dtype=np.float64)
     for start, (block_obs, block_var, present, partial) in _parallel_blocks(
-        blocks, score, threads, "Pass 2/2 — spot statistics", n_spots
+        blocks, score, threads, "Pass 2/2 — spot statistics", n_spots, metrics
     ):
         obs[start:start + len(block_obs)] = block_obs
         var[start:start + len(block_var)] = block_var
@@ -147,14 +160,21 @@ def _spot_statistics(blocks, means, stds, w, strata, codes, n_domains, threads):
 
 
 def run_pipeline_fast(args):
-    source = (CachedGSS(args.gss_cache, args.gss, args.gss_gene_col) if args.gss_cache
-              else FeatherGSS(args.gss, args.gss_gene_col))
+    started = perf_counter()
+    with analysis_source(
+        args.gss, gene_col=args.gss_gene_col, cache=getattr(args, "gss_cache", None),
+        temp_dir=getattr(args, "temp_dir", None),
+        projection_size=getattr(args, "projection_size", None),
+        memory_limit=getattr(args, "memory_limit", None),
+    ) as source:
+        import_seconds = perf_counter() - started
+        return _run_source(args, source, import_seconds)
+
+
+def _run_source(args, source, import_seconds):
     out = Path(args.out).expanduser().resolve()
     out.mkdir(parents=True, exist_ok=True)
-    settings = {"engine": "fast", "threads": args.threads, "spot_block": args.block_size,
-                "feather_projection_size": args.projection_size,
-                "gss_cache": str(source.path) if args.gss_cache else None}
-    LOG.info("Fast engine; %s", settings)
+    started = perf_counter()
     burden, info = load_burden(args.burden, args.gene_col, args.p_col, args.mask_col,
                                args.mask, args.trait_col, args.trait, args.duplicate_policy)
     gene_map = read_gene_map(args.gene_map)
@@ -176,10 +196,26 @@ def run_pipeline_fast(args):
     n_spots = len(spots)
     LOG.info("Matched %d genes and %d spots before QC", len(rows), n_spots)
 
-    def blocks(genes):
-        return source.blocks(indices, genes, args.block_size, args.projection_size)
+    labels = coords.loc[spots, "domain"].to_numpy(dtype=str)
+    domains = pd.Index(pd.unique(labels), name="domain")
+    settings = plan_blocks(
+        source, len(rows), n_spots, len(domains),
+        threads=getattr(args, "threads", None), block_size=getattr(args, "block_size", None),
+        projection_size=getattr(args, "projection_size", None),
+        memory_limit=getattr(args, "memory_limit", None),
+    )
+    settings.update(storage=source.storage, gss_cache=getattr(args, "gss_cache", None))
+    LOG.info("Analysis resource plan %s", settings)
+    performance = {"source_setup_seconds": import_seconds,
+                   "alignment_seconds": perf_counter() - started,
+                   "gene_qc": {}, "spot_statistics": {}}
 
-    good, means, stds = _gene_moments(blocks(rows), len(rows), n_spots, args.threads)
+    def blocks(genes):
+        return source.blocks(indices, genes, settings["spot_block"], settings["projection_size"])
+
+    good, means, stds = _gene_moments(
+        blocks(rows), len(rows), n_spots, settings["threads"], performance["gene_qc"],
+    )
     genes = rows[good]
     if len(genes) < args.min_genes:
         raise ValueError(f"Only {len(genes)} finite/nonconstant genes after QC (<{args.min_genes})")
@@ -190,11 +226,10 @@ def run_pipeline_fast(args):
     w_raw, w, strata, matching = _burden_weights(
         burden, args.score_mode, args.binary_threshold, args.p_cap, args.match_cols, args.match_bins,
     )
-    labels = coords.loc[spots, "domain"].to_numpy(dtype=str)
-    domains = pd.Index(pd.unique(labels), name="domain")
     codes = pd.Categorical(labels, categories=domains).codes
     obs, var, profile, comp, counts = _spot_statistics(
-        blocks(genes), means, stds, w, strata, codes, len(domains), args.threads,
+        blocks(genes), means, stds, w, strata, codes, len(domains), settings["threads"],
+        performance["spot_statistics"],
     )
     source.check_source()
     w32 = w.astype(np.float32)
@@ -216,8 +251,8 @@ def run_pipeline_fast(args):
         "input_burden_column_mapping": info, "genes_before_qc": len(rows),
         "genes_after_qc": len(genes), "excluded_invalid_or_invariant_genes": len(rows) - len(genes),
         "n_input_gss_spots": n_spots, "trait_name": args.trait_name, **meta,
-        "low_memory": settings,
+        "low_memory": settings, "performance": performance,
     }
     _write_results(EnrichmentResult(out_sp, out_reg, out_gene, meta), burden, details, out, args,
-                   skip_plots=args.skip_plots)
+                   skip_plots=getattr(args, "skip_plots", False))
     return details

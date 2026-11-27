@@ -57,7 +57,7 @@ def test_analytic_outputs_match_legacy(inputs, tmp_path, mode):
     cache = str(tmp_path / "cache")
     main(["cache-gss", "--gss", common[1], "--out", cache, "--projection-size", "31"])
     main(["cache-gss", "--gss", common[1], "--out", cache])
-    main(["run", *common, "--out", str(tmp_path / "legacy")])
+    main(["run", *common, "--engine", "legacy", "--out", str(tmp_path / "legacy")])
     for name, flags in [
         ("direct", ["--engine", "fast", "--threads", "1", "--block-size", "17",
                     "--projection-size", "23"]),
@@ -130,3 +130,126 @@ def test_single_domain_has_zero_competitive_signal(inputs, tmp_path):
     assert region["competitive_score"].item() == 0
     assert region["null_sd_competitive_analytic"].item() == 0
     assert region["p_holm_competitive_analytic"].item() == 1
+
+
+@pytest.mark.parametrize("suffix", [".parquet", ".tsv.gz", ".csv.xz"])
+def test_auto_engine_formats_and_reusable_cache(inputs, tmp_path, suffix):
+    from bgsmap.io import read_table
+
+    frame = read_table(inputs[1])
+    converted = tmp_path / ("input" + suffix)
+    if suffix == ".parquet":
+        # Several row groups and an interior gene field exercise Parquet projections.
+        numeric = frame.select_dtypes(include="number").columns
+        frame[numeric] = frame[numeric].astype(np.float32)
+        frame.index = [f"old-row-{i}" for i in range(len(frame))]
+        frame.to_parquet(converted, row_group_size=9, index=True)
+    else:
+        frame.to_csv(converted, sep="," if ".csv" in suffix else "\t", index=False)
+    common = list(inputs)
+    common[1] = str(converted)
+    cache = tmp_path / "reusable"
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    main(["run", *common, "--engine", "legacy", "--out", str(tmp_path / "reference")])
+    for name, extra in [
+        ("auto", ["--temp-dir", str(scratch)]),
+        ("cached", ["--gss-cache", str(cache)]),
+        ("reused", ["--gss-cache", str(cache)]),
+    ]:
+        out = tmp_path / name
+        main(["run", *common, "--threads", "2", "--block-size", "13",
+              "--projection-size", "37", "--memory-limit", "256M", "--out", str(out), *extra])
+        for filename, key in [("spot_results.tsv.gz", "spot"), ("region_results.tsv", "domain"),
+                              ("gene_contributions.tsv.gz", "gene"), ("aligned_burden.tsv.gz", "gene")]:
+            expected = pd.read_csv(tmp_path / "reference" / filename, sep="\t").set_index(key).sort_index()
+            actual = pd.read_csv(out / filename, sep="\t").set_index(key).sort_index()
+            pd.testing.assert_frame_equal(actual, expected, rtol=3e-5, atol=2e-6)
+        details = json.loads((out / "run_metadata.json").read_text())
+        assert details["execution"] == {"requested_engine": "auto", "engine": "fast"}
+        assert details["low_memory"]["memory_budget_bytes"] == 256 * 2**20
+        assert details["low_memory"]["estimated_working_set_bytes"] <= 256 * 2**20
+        timing = details["performance"]
+        assert timing["total_seconds"] > timing["gene_qc"]["wall_seconds"] > 0
+        assert timing["spot_statistics"]["n_blocks"] >= 8
+        assert timing["write_tables_seconds"] > 0
+    assert not list(scratch.iterdir())
+
+
+def test_budget_resizes_tiles_and_rejects_oversized_explicit_request():
+    from types import SimpleNamespace
+    from bgsmap.resources import plan_blocks
+
+    source = SimpleNamespace(storage="columnar", genes=range(17008))
+    plan = plan_blocks(source, 17008, 563390, 81, threads=4, memory_limit="1G")
+    assert plan["estimated_working_set_bytes"] <= 2**30
+    assert plan["projection_size"] < 4096
+    with pytest.raises(ValueError, match="exceeds --memory-limit"):
+        plan_blocks(source, 17008, 563390, 81, threads=4, block_size=4096,
+                    projection_size=4096, memory_limit="1G")
+
+
+def test_cli_flag_overrides_config_even_when_equal_to_default(inputs, tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"engine": "legacy", "threads": 1, "permutations": 19,
+                                  "out": str(tmp_path / "result")}))
+    main(["run", *inputs, "--config", str(config), "--engine", "auto"])
+    details = json.loads((tmp_path / "result" / "run_metadata.json").read_text())
+    assert details["execution"]["engine"] == "fast"
+    assert details["permutations"] == 0
+
+
+def test_temporary_text_cache_is_cleaned_after_failure(inputs, tmp_path):
+    from bgsmap.io import read_table
+
+    text = tmp_path / "input.tsv.gz"
+    read_table(inputs[1]).to_csv(text, sep="\t", index=False)
+    args = list(inputs)
+    args[1] = str(text)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    with pytest.raises(ValueError, match="exceeds --memory-limit"):
+        main(["run", *args, "--temp-dir", str(scratch), "--memory-limit", "1M",
+              "--out", str(tmp_path / "result")])
+    assert not list(scratch.iterdir())
+
+
+def test_python_pipeline_uses_auto_engine(inputs, tmp_path):
+    from bgsmap.cli import build_parser
+    from bgsmap.pipeline import run_pipeline
+
+    args = build_parser().parse_args(["run", *inputs, "--out", str(tmp_path / "result")])
+    details = run_pipeline(args)
+    assert details["execution"]["engine"] == "fast"
+    assert args.engine == "auto"  # Caller-owned options retain the requested value.
+
+
+def test_auto_preserves_feather_v1_compatibility(inputs, tmp_path):
+    import pyarrow.feather as feather
+    from bgsmap.io import read_table
+
+    frame = read_table(inputs[1])
+    numeric = frame.select_dtypes(include="number").columns
+    frame[numeric] = frame[numeric].astype(np.float32)
+    v1 = tmp_path / "old.feather"
+    feather.write_feather(frame, v1, version=1)
+    args = list(inputs)
+    args[1] = str(v1)
+    out = tmp_path / "old-result"
+    main(["run", *args, "--out", str(out)])
+    meta = json.loads((out / "run_metadata.json").read_text())
+    assert meta["execution"]["engine"] == "legacy"
+    with pytest.raises(ValueError, match="requires Feather V2"):
+        main(["run", *args, "--engine", "fast", "--out", str(tmp_path / "fast")])
+
+
+def test_quick_dispatches_through_auto_engine(inputs, tmp_path, monkeypatch):
+    def precompute(*args, **kwargs):
+        return inputs[1], inputs[inputs.index("--h5ad") + 1]
+
+    monkeypatch.setattr("bgsmap.gsmap_bridge.precompute_gss", precompute)
+    out = tmp_path / "quick"
+    main(["quick", *inputs, "--workdir", str(tmp_path / "work"), "--sample-name", "generic",
+          "--out", str(out)])
+    meta = json.loads((out / "run_metadata.json").read_text())
+    assert meta["execution"] == {"requested_engine": "auto", "engine": "fast"}

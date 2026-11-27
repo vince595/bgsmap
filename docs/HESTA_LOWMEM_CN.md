@@ -1,4 +1,7 @@
-# bgsmap 1.2.0 · HESTA 大切片运行指南
+# bgsmap 1.2.0 · HESTA 大切片运行记录
+
+当前通用版本为 1.3.0。安装、自动分块、内存预算及跨数据集用法见
+[大数据性能与内存指南](PERFORMANCE_CN.md)。本文保留 1.2.0 的测量记录和集群示例。
 
 1.2.0 将低内存分析集成到 `bgsmap`。使用 `bgsmap-lowmem run` 或
 `bgsmap run --engine fast` 启用，输入为 Feather V2，支持解析模式

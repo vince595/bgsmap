@@ -5,7 +5,7 @@
 #SBATCH --time=48:00:00
 #SBATCH --output=bgsmap-hesta-%j.log
 
-# Submit from an environment where bgsmap 1.2.0 is already on PATH.
+# Submit from an environment where bgsmap 1.3.0 is already on PATH.
 # sbatch examples/hesta_lowmem.slurm GSS H5AD BURDEN CACHE_DIR NEW_RESULT_DIR
 set -euo pipefail
 
@@ -29,7 +29,7 @@ cpus=${SLURM_CPUS_PER_TASK:-8}
 workers=$((cpus > 1 ? cpus - 1 : 1))
 
 bgsmap cache-gss --gss "$gss" --out "$cache" --projection-size 4096
-bgsmap-lowmem run \
+bgsmap run \
     --gss "$gss" --h5ad "$h5ad" --annotation substructure \
     --burden "$burden" --gene-col gene_symbol --p-col Pvalue_Burden \
     --score-mode logp --duplicate-policy bonferroni --permutations 0 --seed 42 \

@@ -1,4 +1,4 @@
-"""Compare bgsmap 1.2.0 with the original low-memory wheel on synthetic GSS."""
+"""Compare bgsmap engines across synthetic spatial GSS shapes and formats."""
 import argparse
 import json
 import os
@@ -44,7 +44,7 @@ def measure(python, module, args, root, name, env):
     return result
 
 
-def make_inputs(root, genes, spots, domains):
+def make_inputs(root, genes, spots, domains, format="feather", compression="lz4"):
     rng = np.random.default_rng(42)
     gene_names = [f"G{i}" for i in range(genes)]
     spot_names = [f"S{i:06}" for i in range(spots)]
@@ -58,7 +58,17 @@ def make_inputs(root, genes, spots, domains):
     markers[::domains, :20] += 2
     table = pa.Table.from_arrays([pa.array(gene_names), *map(pa.array, markers)],
                                  names=["HUMAN_GENE_SYM", *spot_names])
-    feather.write_feather(table, root / "gss.feather", compression="lz4", chunksize=genes)
+    gss = root / f"gss.{format}"
+    if format == "feather":
+        feather.write_feather(table, gss, compression=compression, chunksize=genes)
+    elif format == "parquet":
+        frame = table.to_pandas()
+        numeric = frame.columns[1:]
+        frame[numeric] = frame[numeric].astype(np.float32)
+        frame.to_parquet(gss, index=False, row_group_size=max(1, genes // 4))
+    else:
+        table.to_pandas().to_csv(gss, sep="," if format.startswith("csv") else "\t",
+                                index=False)
     pd.DataFrame({"spot": spot_names, "x": np.arange(spots) % 1024,
                   "y": np.arange(spots) // 1024,
                   "domain": [f"D{i % domains:02}" for i in range(spots)]}
@@ -90,6 +100,11 @@ def main():
     parser.add_argument("--genes", type=int, default=2048)
     parser.add_argument("--spots", type=int, default=40000)
     parser.add_argument("--domains", type=int, default=81)
+    parser.add_argument("--format", choices=["feather", "parquet", "tsv.gz", "csv.gz"], default="feather")
+    parser.add_argument("--compression", choices=["lz4", "zstd", "uncompressed"], default="lz4")
+    parser.add_argument("--baseline-engine", choices=["lowmem", "legacy"], default="lowmem",
+                        help="Use the original 1.1.0 wheel or this version's legacy in-memory engine")
+    parser.add_argument("--memory-limit", default="1G", help="Budget for the automatic engine")
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--block-size", type=int, default=512)
     parser.add_argument("--projection-size", type=int, default=4096)
@@ -99,17 +114,22 @@ def main():
     parser.add_argument("--check-legacy", action="store_true",
                         help="Also run original bgsmap 1.0.0 with plots, outside the speed comparison")
     args = parser.parse_args()
+    if args.baseline_engine == "lowmem" and args.format != "feather":
+        parser.error("The original low-memory wheel requires --format feather")
+    if args.check_legacy and args.baseline_engine != "lowmem":
+        parser.error("--check-legacy requires --baseline-engine lowmem")
     root = args.out.resolve()
     root.mkdir(parents=True)
-    make_inputs(root, args.genes, args.spots, args.domains)
+    make_inputs(root, args.genes, args.spots, args.domains, args.format, args.compression)
     env = os.environ.copy()
     env.update(dict(OPENBLAS_NUM_THREADS="1", MKL_NUM_THREADS="1", OMP_NUM_THREADS="1",
                     VECLIB_MAXIMUM_THREADS="1", MPLBACKEND="Agg",
-                    BGS_LOWMEM_SPOT_BLOCK="256", BGS_LOWMEM_SKIP_PLOTS="1"))
+                    BGS_LOWMEM_SKIP_PLOTS="1"))
     old_env = env.copy()
+    old_env["BGS_LOWMEM_SPOT_BLOCK"] = "256"
     if args.baseline_path:
         old_env["PYTHONPATH"] = args.baseline_path
-    gss = str(root / "gss.feather")
+    gss = str(root / f"gss.{args.format}")
     cache = str(root / "cache")
     common = ["run", "--gss", gss, "--coords", str(root / "coords.tsv"),
               "--burden", str(root / "burden.tsv"), "--gene-col", "gene_symbol",
@@ -118,12 +138,20 @@ def main():
     meta = {"platform": platform.platform(), "python": platform.python_version(),
             "arrow": pa.__version__, "numpy": np.__version__, "spots": args.spots,
             "genes": args.genes, "domains": args.domains, "block_size": args.block_size,
-            "projection_size": args.projection_size}
+            "projection_size": args.projection_size, "format": args.format,
+            "compression": args.compression if args.format == "feather" else None}
     runs = {}
     differences = {}
-    runs["lowmem_1_1_0"] = measure(args.baseline_python, "bgsmap_lowmem",
-                                   [*common, "--out", str(root / "lowmem_1_1_0")],
-                                   root, "lowmem_1_1_0", old_env)
+    baseline = "lowmem_1_1_0" if args.baseline_engine == "lowmem" else "legacy"
+    baseline_flags = [] if args.baseline_engine == "lowmem" else ["--engine", "legacy", "--skip-plots"]
+    module = "bgsmap_lowmem" if args.baseline_engine == "lowmem" else "bgsmap"
+    runs[baseline] = measure(args.baseline_python, module,
+                             [*common, *baseline_flags, "--out", str(root / baseline)],
+                             root, baseline, old_env)
+    runs["auto"] = measure(sys.executable, "bgsmap", [
+        *common, "--skip-plots", "--memory-limit", args.memory_limit, "--out", str(root / "auto"),
+    ], root, "auto", env)
+    differences["auto"] = compare(root, baseline, "auto")
     fast = [*common, "--engine", "fast", "--skip-plots",
             "--projection-size", str(args.projection_size), "--block-size", str(args.block_size)]
     for use_cache in (False, True):
@@ -138,7 +166,7 @@ def main():
             runs[label] = measure(sys.executable, "bgsmap",
                                   [*fast, *extra, "--threads", str(workers),
                                    "--out", str(root / label)], root, label, env)
-            differences[label] = compare(root, "lowmem_1_1_0", label)
+            differences[label] = compare(root, baseline, label)
     if args.check_legacy:
         measure(args.baseline_python, "bgsmap", [*common, "--out", str(root / "legacy")],
                 root, "legacy", old_env)
